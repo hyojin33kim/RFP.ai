@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+import asyncio
 from pathlib import Path
 from functools import lru_cache
 
@@ -15,6 +16,7 @@ from src.ingestion.pdf_parser import parse_document
 from src.ingestion.manifest import write_manifest
 
 router = APIRouter(prefix="/api", tags=["documents"])
+MAX_ACTIVE_DOCUMENTS = 10
 
 
 def meaningful_heading(value: str | None) -> bool:
@@ -43,7 +45,17 @@ def pages() -> list[dict]:
 
 @router.get("/documents", response_model=list[DocumentSummary])
 def documents():
-    return [DocumentSummary(document_id=item["document_id"], title=item["title"], organization=item["organization"], difficulty=item.get("difficulty")) for item in manifest()["documents"]]
+    rows = []
+    for item in manifest()["documents"]:
+        pdf_path = Path(item.get("pdf_path", ""))
+        document_date = None
+        if pdf_path.is_file():
+            document_date = pdf_path.stat().st_mtime_ns
+        rows.append(DocumentSummary(
+            document_id=item["document_id"], title=item["title"], organization=item["organization"],
+            difficulty=item.get("difficulty"), document_date=str(document_date) if document_date else None,
+        ))
+    return rows
 
 
 @router.put("/documents/upload")
@@ -55,14 +67,31 @@ async def upload_document(request: Request, filename: str = "uploaded.pdf", titl
     if not content.startswith(b"%PDF"):
         raise HTTPException(status_code=400, detail="request body is not a PDF")
     root = Path(__file__).resolve().parents[2]
+    document_id = f"upload_{hashlib.sha1(content).hexdigest()[:10]}"
+    current_documents = manifest()["documents"]
+    if len(current_documents) >= MAX_ACTIVE_DOCUMENTS and not any(
+        item["document_id"] == document_id for item in current_documents
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f"활성 문서는 최대 {MAX_ACTIVE_DOCUMENTS}개입니다. 기존 문서를 삭제한 뒤 다시 시도하세요.",
+        )
     upload_dir = root / "data" / "uploads"; upload_dir.mkdir(parents=True, exist_ok=True)
     safe_name = Path(filename).name
     path = upload_dir / safe_name; path.write_bytes(content)
-    document_id = f"upload_{hashlib.sha1(content).hexdigest()[:10]}"
     manifest_item = DocumentManifest(document_id=document_id, difficulty="medium", organization=organization,
         title=title or Path(safe_name).stem, csv_filename=safe_name, pdf_path=str(path), filename=safe_name,
         file_size=len(content), sha256=hashlib.sha256(content).hexdigest(), match_score=1.0,
         target_accuracy="pending", complexity="uploaded")
+    from src.main_rag.upload_indexer import index_uploaded_pdf
+    advanced = await asyncio.to_thread(
+        index_uploaded_pdf,
+        path,
+        document_id=document_id,
+        title=manifest_item.title,
+        organization=organization,
+        retriever=request.app.state.rag_client.advanced_retriever,
+    )
     pages_out, _ = parse_document(manifest_item)
     chunks_out = chunk_pages(pages_out)
     pages_path = root / "data/processed/pages.jsonl"; chunks_path = root / "data/processed/chunks.jsonl"
@@ -77,7 +106,10 @@ async def upload_document(request: Request, filename: str = "uploaded.pdf", titl
     from backend.services.rag_client import RAGClient
     request.app.state.search_service = SearchService()
     request.app.state.rag_client = RAGClient(search_service=request.app.state.search_service)
-    return {"document_id": document_id, "title": manifest_item.title, "pages": len(pages_out), "chunks": len(chunks_out), "status": "indexed"}
+    return {
+        "document_id": document_id, "title": manifest_item.title,
+        "pages": len(pages_out), "chunks": len(chunks_out), **advanced,
+    }
 
 
 @router.get("/documents/{document_id}")
@@ -152,4 +184,10 @@ def search(document_id: str, q: str, top_k: int = 5):
 @router.get("/health")
 def health(request: Request):
     service = request.app.state.search_service
-    return {"status": "ok", "chunk_count": len(service.chunks), "default_retriever": service.default_retriever, "available_retrievers": service.available_retrievers}
+    return {
+        "status": "ok", "chunk_count": len(service.chunks),
+        "default_retriever": request.app.state.rag_client.advanced_retriever.mode,
+        "available_retrievers": ["main_advanced_dense", "hybrid_rrf"],
+        "document_capacity": {"used": len(manifest()["documents"]), "maximum": MAX_ACTIVE_DOCUMENTS},
+        "conversation_sessions": request.app.state.rag_client.sessions.session_count,
+    }

@@ -51,6 +51,7 @@ class RiskItem(BaseModel):
     severity: Literal["critical", "warning", "info"]
     title: str
     description: str
+    user_status: Literal["unchecked", "at_risk", "safe", "review_required"] = "unchecked"
     source_ids: list[str] = []
     evidence: Evidence | None = None
 
@@ -77,6 +78,7 @@ class EligibilityResponse(BaseModel):
 class DeliverableItem(BaseModel):
     id: str
     name: str
+    kind: Literal["bid_submission", "project_deliverable"] = "bid_submission"
     description: str = ""
     format: str = "확인 필요"
     quantity: int = 1
@@ -96,7 +98,10 @@ class DeliverablesResponse(BaseModel):
 
 class RequirementItem(BaseModel):
     id: str
-    category: Literal["functional", "performance", "security", "operation", "personnel", "output", "contract"] = "functional"
+    category: Literal[
+        "functional", "performance", "security", "quality", "interface", "data",
+        "operation", "personnel", "output", "deliverable", "contract", "project",
+    ] = "functional"
     title: str
     description: str
     priority: Literal["high", "medium", "low"] = "medium"
@@ -114,10 +119,15 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=1)
     chat_history: list[dict[str, str]] = []
     provider: Literal["openai", "gemini", "gemini-lite"] = "gemini-lite"
+    conversation_id: str = Field(default="default", min_length=1, max_length=128)
 
 
 class EligibilityStatusUpdate(BaseModel):
-    user_status: Literal["met", "not_met", "review_required"]
+    user_status: Literal["unchecked", "met", "not_met", "review_required"]
+
+
+class RiskStatusUpdate(BaseModel):
+    user_status: Literal["unchecked", "at_risk", "safe", "review_required"]
 
 
 class DeliverableUpdate(BaseModel):
@@ -130,4 +140,5 @@ class DocumentSummary(BaseModel):
     title: str
     organization: str
     difficulty: str | None = None
+    document_date: str | None = None
     status: str = "ready"

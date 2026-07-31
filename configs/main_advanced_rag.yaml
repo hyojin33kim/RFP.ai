@@ -1,0 +1,46 @@
+paths:
+  source_dir: data/raw/unused_pdfs
+  source_manifest: data/manifests/documents.json
+  advanced_manifest: data/main_advanced/manifest/documents.jsonl
+  recovery_dir: data/main_advanced/recovery
+  preprocessing_dir: data/main_advanced/preprocessed
+  chunks: data/main_advanced/chunks/chunks_advanced.jsonl.gz
+  chunking_report: reports/main_advanced/advanced_chunking_report.json
+  chroma: data/main_advanced/chroma
+  bm25: data/main_advanced/bm25/bm25_index.pkl
+  bm25_manifest: data/main_advanced/bm25/bm25_manifest.json
+  indexing_report: reports/main_advanced/indexing_report.json
+  reports: reports/main_advanced
+
+index:
+  collection_name: ai11_policy_advanced_v2
+  embedding_model: text-embedding-3-small
+  embedding_dimension: 1536
+  batch_size: 100
+
+retrieval:
+  # Hybrid RRF is available for evaluation, but remains opt-in until it beats
+  # the Dense baseline on the 9-document Golden v3 evaluation.
+  mode: dense
+  top_k: 10
+  dense_candidate_k: 12
+  bm25_candidate_k: 12
+  rrf_k: 60
+  dense_weight: 0.3
+  bm25_weight: 0.7
+  require_document_id: true
+  reranker:
+    enabled: false
+
+generation:
+  provider: openai
+  model: gpt-5-nano
+  max_context_chars: 7000
+  max_docs: 10
+
+# P1 evaluation uses generation.provider/model above. P2 browser requests select
+# one of these runtime models without changing the recorded evaluation setup.
+runtime:
+  openai: gpt-5-nano
+  gemini: gemini-3.5-flash
+  gemini_lite: gemini-3.5-flash-lite
